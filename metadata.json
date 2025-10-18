@@ -1,0 +1,5 @@
+{
+  "name": "FileMerge",
+  "description": "A web application to merge multiple JPEG files into a single PDF, and convert a PDF file into multiple JPEG files.",
+  "requestFramePermissions": []
+}
