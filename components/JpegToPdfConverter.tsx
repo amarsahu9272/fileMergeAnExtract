@@ -3,7 +3,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import type { FileWithPreview } from '../types';
 import FileDropzone from './FileDropzone';
 import { Spinner } from './Spinner';
-import { TrashIcon, DownloadIcon, FileIcon } from './icons';
+import { TrashIcon, DownloadIcon, FileIcon, MergeIcon } from './icons';
 
 // Declare global jspdf variable from CDN
 declare const jspdf: any;
@@ -17,17 +17,21 @@ const JpegToPdfConverter: React.FC = () => {
 
     const handleFilesAccepted = useCallback((acceptedFiles: File[]) => {
         const filesWithPreview = acceptedFiles
-            .filter(file => file.type === 'image/jpeg')
+            .filter(file => file.type === 'image/jpeg' || file.type === 'image/jpg')
             .map(file => Object.assign(file, {
                 preview: URL.createObjectURL(file)
-            }));
+            }) as FileWithPreview);
         setFiles(prev => [...prev, ...filesWithPreview]);
         setPdfUrl(null);
     }, []);
 
-    const removeFile = (fileName: string) => {
-        const newFiles = files.filter(file => file.name !== fileName);
-        setFiles(newFiles);
+    const removeFile = (index: number) => {
+        setFiles(prev => {
+            const newFiles = [...prev];
+            URL.revokeObjectURL(newFiles[index].preview);
+            newFiles.splice(index, 1);
+            return newFiles;
+        });
     };
 
     const handleSort = () => {
@@ -46,8 +50,13 @@ const JpegToPdfConverter: React.FC = () => {
         setPdfUrl(null);
 
         try {
-            const { jsPDF } = jspdf;
-            const pdf = new jsPDF('p', 'mm', 'a4');
+            // Robust global access for jspdf
+            const jsPDFConstructor = jspdf?.jsPDF || (window as any).jspdf?.jsPDF || (window as any).jsPDF;
+            if (!jsPDFConstructor) {
+              throw new Error("PDF library not loaded. Please ensure you are online and refresh the page.");
+            }
+
+            const pdf = new jsPDFConstructor('p', 'mm', 'a4');
             const a4Width = 210;
             const a4Height = 297;
             const margin = 10;
@@ -59,7 +68,7 @@ const JpegToPdfConverter: React.FC = () => {
                 const img = new Image();
                 img.src = file.preview;
 
-                await new Promise<void>(resolve => {
+                await new Promise<void>((resolve, reject) => {
                     img.onload = () => {
                         if (i > 0) {
                             pdf.addPage();
@@ -74,16 +83,17 @@ const JpegToPdfConverter: React.FC = () => {
                         const x = (a4Width - newWidth) / 2;
                         const y = (a4Height - newHeight) / 2;
 
-                        pdf.addImage(img, 'JPEG', x, y, newWidth, newHeight);
+                        pdf.addImage(img, 'JPEG', x, y, newWidth, newHeight, undefined, 'FAST');
                         resolve();
                     };
+                    img.onerror = () => reject(new Error(`Failed to load image: ${file.name}`));
                 });
             }
             const pdfBlob = pdf.output('blob');
             setPdfUrl(URL.createObjectURL(pdfBlob));
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error converting to PDF:", error);
-            alert("An error occurred during PDF conversion.");
+            alert(error.message || "An error occurred during PDF conversion.");
         } finally {
             setIsConverting(false);
         }
@@ -98,47 +108,58 @@ const JpegToPdfConverter: React.FC = () => {
 
 
     return (
-        <div className="w-full bg-dark-card border border-dark-border rounded-xl shadow-lg p-6 animate-fade-in">
+        <div className="w-full bg-dark-card/80 backdrop-blur-lg border border-dark-border rounded-3xl shadow-2xl p-8 transition-all duration-500">
             {files.length === 0 ? (
                 <FileDropzone onFilesAccepted={handleFilesAccepted} accept={{ 'image/jpeg': ['.jpg', '.jpeg'] }} multiple={true} />
             ) : (
-                <div>
-                    <h3 className="text-lg font-semibold text-dark-text-primary mb-4">Your Files (Drag to reorder)</h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6 max-h-80 overflow-y-auto pr-2">
+                <div className="animate-fade-in">
+                    <div className="flex items-center justify-between mb-6">
+                      <h3 className="text-xl font-bold text-dark-text-primary">Your Photos ({files.length})</h3>
+                      <button onClick={resetState} className="text-sm text-dark-text-secondary hover:text-red-400 transition-colors">
+                        Clear all
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-8 max-h-[500px] overflow-y-auto pr-2">
                         {files.map((file, index) => (
                             <div
                                 key={file.name + index}
-                                className="relative group p-2 border-2 border-dashed border-dark-border rounded-lg cursor-grab active:cursor-grabbing"
+                                className="relative group aspect-square bg-dark-bg/50 border border-dark-border rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing hover:border-brand-primary transition-all duration-300"
                                 draggable
                                 onDragStart={() => (dragItem.current = index)}
                                 onDragEnter={() => (dragOverItem.current = index)}
                                 onDragEnd={handleSort}
                                 onDragOver={(e) => e.preventDefault()}
                             >
-                                <img src={file.preview} alt={file.name} className="w-full h-24 object-cover rounded-md" />
-                                <p className="text-xs text-dark-text-secondary truncate mt-2">{file.name}</p>
+                                <img src={file.preview} alt={file.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
+                                  <p className="text-[10px] text-white truncate w-full">{file.name}</p>
+                                </div>
                                 <button
-                                    onClick={() => removeFile(file.name)}
-                                    className="absolute top-1 right-1 bg-red-600/80 hover:bg-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                                    className="absolute top-2 right-2 bg-red-500/90 hover:bg-red-500 rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-all shadow-lg hover:scale-110"
                                 >
-                                    <TrashIcon className="w-3 h-3 text-white" />
+                                    <TrashIcon className="w-3.5 h-3.5 text-white" />
                                 </button>
                             </div>
                         ))}
                     </div>
 
-                    <div className="flex flex-col sm:flex-row gap-4 justify-center mt-4">
+                    <div className="flex flex-col sm:flex-row gap-4 justify-center">
                         {pdfUrl ? (
                              <div className="flex flex-col sm:flex-row items-center gap-4 w-full">
                                 <a
                                     href={pdfUrl}
                                     download="merged.pdf"
-                                    className="w-full sm:w-auto flex-grow justify-center inline-flex items-center gap-2 px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition"
+                                    className="w-full sm:w-auto flex-grow justify-center inline-flex items-center gap-3 px-8 py-4 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl shadow-lg shadow-green-500/20 transition-all hover:-translate-y-0.5"
                                 >
                                     <DownloadIcon className="w-5 h-5" />
                                     Download PDF
                                 </a>
-                                <button onClick={resetState} className="w-full sm:w-auto justify-center inline-flex items-center gap-2 px-6 py-3 border border-dark-border text-base font-medium rounded-md text-dark-text-secondary bg-dark-card hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition">
+                                <button 
+                                  onClick={resetState} 
+                                  className="w-full sm:w-auto justify-center inline-flex items-center gap-2 px-8 py-4 bg-dark-bg border border-dark-border text-dark-text-primary font-bold rounded-2xl hover:bg-dark-border transition-all"
+                                >
                                     <FileIcon className="w-5 h-5" />
                                     Convert More
                                 </button>
@@ -148,12 +169,9 @@ const JpegToPdfConverter: React.FC = () => {
                                 <button
                                     onClick={convertToPdf}
                                     disabled={isConverting}
-                                    className="w-full sm:w-auto justify-center inline-flex items-center gap-2 px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-brand-primary hover:bg-brand-secondary disabled:bg-indigo-400 disabled:cursor-not-allowed transition"
+                                    className="w-full sm:w-auto flex-grow justify-center inline-flex items-center gap-3 px-10 py-5 bg-brand-primary hover:bg-brand-secondary text-white font-bold rounded-2xl shadow-xl shadow-brand-primary/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:-translate-y-1 active:scale-95"
                                 >
-                                    {isConverting ? <><Spinner /> Converting...</> : "Merge to PDF"}
-                                </button>
-                                <button onClick={resetState} className="w-full sm:w-auto justify-center inline-flex items-center px-6 py-3 border border-dark-border text-base font-medium rounded-md text-dark-text-secondary bg-dark-card hover:bg-gray-600 transition">
-                                    Clear Files
+                                    {isConverting ? <><Spinner /> Building PDF...</> : <><MergeIcon className="w-5 h-5" /> Merge to PDF</>}
                                 </button>
                              </>
                         )}
@@ -165,4 +183,3 @@ const JpegToPdfConverter: React.FC = () => {
 };
 
 export default JpegToPdfConverter;
-
